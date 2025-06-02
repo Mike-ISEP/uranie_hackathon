@@ -1,1 +1,8 @@
 streamlit
+pip
+pandas
+numpy
+scikit-learn
+tensorflow
+scipy
+seaborn
