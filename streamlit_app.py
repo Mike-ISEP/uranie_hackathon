@@ -145,17 +145,15 @@ def append_user_label(label):
         if label == 1:
             if true_val:
                 st.session_state.tp += 1
-                st.session_state.fp -= 1
+                
             else:
                 st.session_state.fp += 1
-                st.session_state.tp -= 1
+
         else:
             if not true_val:
                 st.session_state.tn += 1
-                st.session_state.fn -= 1
             else:
                 st.session_state.fn += 1
-                st.session_state.tn -= 1
 
         st.session_state.r_losses = np.append(st.session_state.r_losses, entry['mse'])
         st.session_state.true_labels = np.append(st.session_state.true_labels, label)
