@@ -225,7 +225,7 @@ st.write(f"Evaluated: {len(st.session_state.evaluated_indices)}")
 if len(st.session_state.evaluated_indices) > 0:
     accuracy = (st.session_state.tp + st.session_state.tn) / len(st.session_state.evaluated_indices)
     st.write(f"Accuracy: {accuracy:.2%}")
-    st.write(f"TP: {st.session_state.tp}, TN: {st.session_state.tn}, FP: {st.session_state.fp}, FN: {st.session_state.fn}")
+    #st.write(f"TP: {st.session_state.tp}, TN: {st.session_state.tn}, FP: {st.session_state.fp}, FN: {st.session_state.fn}")
 
 st.markdown("### 📝 Log")
 st.text_area("Logs", st.session_state.logs, height=300)
