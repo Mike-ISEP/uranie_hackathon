@@ -2,10 +2,13 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
+import time
+
 from AEmodel import EnsembleDenoisingAE
 from sorting_function import uncertainty_sorting
 from t_update_function import update_threshold
 
+# Constants
 RANDOM_SEED = 42
 TRAINING_SAMPLE = 1000
 VALIDATE_SIZE = 0.2
@@ -51,7 +54,7 @@ def setup_model():
         EDAE.build(X_train)
 
         unlabelled_test = pd.read_csv('workshop_s1.txt', delimiter='\t')
-        x_unlabelled = unlabelled_test.iloc[700:, -1]
+        x_unlabelled = unlabelled_test.iloc[700:, -1].astype(bool)  # ✅ Fix: Ensure labels are boolean
         y_unlabelled = unlabelled_test.iloc[700:, :-1]
 
         st.session_state.EDAE = EDAE
@@ -65,7 +68,7 @@ def setup_model():
     except Exception as e:
         log(f"❌ Error: {e}")
 
-# -------------------------- SIMULATION LOOP --------------------------
+# -------------------------- PROCESS NEXT --------------------------
 def process_next():
     try:
         index, row = next(st.session_state.y_iter)
@@ -73,31 +76,42 @@ def process_next():
         st.session_state.simulation_running = False
         total = len(st.session_state.evaluated_indices)
         accuracy = (st.session_state.tp + st.session_state.tn) / total if total else 0
-        log(f"\n✅ Simulation completed.\nEvaluated: {total}, Accuracy: {accuracy:.4f}")
+        log(f"\n✅ Simulation completed.\nEvaluated: {total}, Accuracy: {accuracy:.2%}")
         return
 
     row_df = pd.DataFrame(row).transpose()
     row_transformed = st.session_state.EDAE.Pipe.transform(row_df)
     reconstruction = st.session_state.EDAE.predict(row_transformed)
     mse = np.mean(np.power(row_transformed - reconstruction, 2), axis=1)
+    mse_val = mse[0]
 
-    if mse > st.session_state.threshold:
+    true_label = st.session_state.x_unlabelled_test.loc[index]
+    flagged = mse_val > st.session_state.threshold
+
+    # ✅ Metric update fix
+    if flagged and true_label:
+        st.session_state.tp += 1
+    elif flagged and not true_label:
+        st.session_state.fp += 1
+    elif not flagged and not true_label:
+        st.session_state.tn += 1
+    elif not flagged and true_label:
+        st.session_state.fn += 1
+
+    if flagged:
         st.session_state.pending_labeling.append({
             'mse': mse,
             'row': row_df,
             'index': index,
-            'true_label': st.session_state.x_unlabelled_test.loc[index],
+            'true_label': true_label,
             'model_flagged': True
         })
     else:
-        true_label = st.session_state.x_unlabelled_test.loc[index]
-        if true_label is False:
-            st.session_state.tn += 1
-        else:
-            st.session_state.fn += 1
         st.session_state.evaluated_indices.add(index)
-        log(f"✔️ No alert at index {index}, MSE={mse[0]:.6f}")
+        log(f"✔️ No alert at index {index}, MSE={mse_val:.6f}")
 
+    st.session_state.r_losses = np.append(st.session_state.r_losses, mse)
+    st.session_state.true_labels = np.append(st.session_state.true_labels, true_label)
     st.session_state.sorted_list.append([row_df, index, mse])
 
     if active and len(st.session_state.sorted_list) > 100:
@@ -121,42 +135,40 @@ def process_next():
                     break
         st.session_state.sorted_list = []
 
-# -------------------------- LABELING FUNCTION --------------------------
+# -------------------------- LABELING --------------------------
 def append_user_label(label):
-    idx = st.session_state.pending_labeling[st.session_state.current_label_index]['index']
-    true_val = st.session_state.pending_labeling[st.session_state.current_label_index]['true_label']
+    entry = st.session_state.pending_labeling[st.session_state.current_label_index]
+    idx = entry['index']
+    true_val = entry['true_label']
 
-    if idx in st.session_state.evaluated_indices:
-        log(f"⚠️ Duplicate label at {idx}")
-    else:
+    if idx not in st.session_state.evaluated_indices:
         if label == 1:
-            if true_val == True:
+            if true_val:
                 st.session_state.tp += 1
             else:
                 st.session_state.fp += 1
         else:
-            if true_val == False:
+            if not true_val:
                 st.session_state.tn += 1
             else:
                 st.session_state.fn += 1
 
-        mse = st.session_state.pending_labeling[st.session_state.current_label_index]['mse']
-        st.session_state.r_losses = np.append(st.session_state.r_losses, mse)
+        st.session_state.r_losses = np.append(st.session_state.r_losses, entry['mse'])
         st.session_state.true_labels = np.append(st.session_state.true_labels, label)
         st.session_state.evaluated_indices.add(idx)
-        log(f"🧑‍💼 User labeled index {idx} as {'Anomaly' if label else 'Normal'}")
+        log(f"🧑‍💼 Labeled index {idx} as {'Anomaly' if label else 'Normal'}")
 
     st.session_state.current_label_index += 1
     if st.session_state.current_label_index >= len(st.session_state.pending_labeling):
         update_threshold_from_labels()
-    else:
-        st.experimental_rerun()
+    st.rerun()
 
 def skip_label():
     st.session_state.current_label_index += 1
-    st.experimental_rerun()
+    if st.session_state.current_label_index >= len(st.session_state.pending_labeling):
+        update_threshold_from_labels()
+    st.rerun()
 
-# -------------------------- THRESHOLD UPDATE --------------------------
 def update_threshold_from_labels():
     current_t = st.session_state.threshold
     st.session_state.threshold = update_threshold(
@@ -167,48 +179,51 @@ def update_threshold_from_labels():
     log(f"📊 Threshold updated: {current_t:.6f} → {st.session_state.threshold:.6f}")
     st.session_state.pending_labeling = []
     st.session_state.current_label_index = 0
-    if st.session_state.simulation_running:
-        process_next()
-    st.experimental_rerun()
 
-# -------------------------- INTERFACE --------------------------
-
+# -------------------------- UI CONTROLS --------------------------
 col1, col2 = st.columns(2)
 with col1:
     if st.button("🚀 Initialize Model"):
         setup_model()
 
 with col2:
-    if st.session_state.initialized and st.button("▶️ Run Simulation"):
-        st.session_state.simulation_running = True
-        process_next()
+    if st.session_state.initialized and not st.session_state.simulation_running:
+        if st.button("▶️ Run Simulation"):
+            st.session_state.simulation_running = True
 
 # -------------------------- LABELING UI --------------------------
-if st.session_state.pending_labeling and st.session_state.current_label_index < len(st.session_state.pending_labeling):
-    entry = st.session_state.pending_labeling[st.session_state.current_label_index]
-    st.markdown("### 🔍 Labeling Required")
-    st.markdown(f"**MSE:** `{entry['mse'][0]:.6f}`")
-    st.markdown(f"**True Label:** `{entry['true_label']}`")
-    st.text(entry['row'].to_string(index=False))
+if st.session_state.simulation_running and st.session_state.initialized:
+    if st.session_state.pending_labeling and st.session_state.current_label_index < len(st.session_state.pending_labeling):
+        entry = st.session_state.pending_labeling[st.session_state.current_label_index]
+        st.markdown("### 🔍 Labeling Required")
+        st.markdown(f"**MSE:** `{entry['mse'][0]:.6f}`")
+        st.markdown(f"**True Label:** `{entry['true_label']}`")
+        st.text(entry['row'].to_string(index=False))
 
-    col3, col4, col5 = st.columns(3)
-    with col3:
-        if st.button("✅ Anomaly"):
-            append_user_label(1)
-    with col4:
-        if st.button("❌ Normal"):
-            append_user_label(0)
-    with col5:
-        if st.button("⏭️ Skip"):
-            skip_label()
+        col3, col4, col5 = st.columns(3)
+        with col3:
+            if st.button("✅ Anomaly"):
+                append_user_label(1)
+        with col4:
+            if st.button("❌ Normal"):
+                append_user_label(0)
+        with col5:
+            if st.button("⏭️ Skip"):
+                skip_label()
+    else:
+        process_next()
+        time.sleep(0.05)
+        st.rerun()
 
-# -------------------------- STATUS & LOG --------------------------
+# -------------------------- STATUS & LOGS --------------------------
 st.markdown("### 📊 Status")
 st.write(f"Threshold: {st.session_state.threshold}")
 st.write(f"Evaluated: {len(st.session_state.evaluated_indices)}")
-accuracy = (st.session_state.tp + st.session_state.tn) / max(1, len(st.session_state.evaluated_indices))
-st.write(f"Accuracy: {accuracy:.2%}")
+
+if len(st.session_state.evaluated_indices) > 0:
+    accuracy = (st.session_state.tp + st.session_state.tn) / len(st.session_state.evaluated_indices)
+    st.write(f"Accuracy: {accuracy:.2%}")
+    st.write(f"TP: {st.session_state.tp}, TN: {st.session_state.tn}, FP: {st.session_state.fp}, FN: {st.session_state.fn}")
 
 st.markdown("### 📝 Log")
 st.text_area("Logs", st.session_state.logs, height=300)
-
