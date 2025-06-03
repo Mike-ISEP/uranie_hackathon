@@ -7,10 +7,15 @@ The Uranie Defense System is a human-in-the-loop anomaly detection web interface
 # 📁 Project Structure
 
 ├── streamlit_app.py          # Main Streamlit web app
+
 ├── workshop_s1.txt           # Input dataset (tab-delimited)
+
 ├── AEmodel.py                # Ensemble Denoising Autoencoder class
+
 ├── sorting_function.py       # Uncertainty sorting logic
+
 ├── t_update_function.py      # Adaptive threshold update logic
+
 └── README.md                 # You're reading it!
 
 ### How to run it on your own machine
